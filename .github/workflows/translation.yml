@@ -1,4 +1,4 @@
-name: ZeroClaw 翻译更新
+name: ZeroClaw 中文翻译
 
 on:
   # 每天早上 8 点自动运行
@@ -9,12 +9,6 @@ on:
   # 当上游 zeroclaw 发布新版本时触发
   release:
     types: [published]
-  # 当上游仓库有更新时触发
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/translation.yml'
 
 env:
   UPSTREAM_REPO: "zeroclaw-labs/zeroclaw"
@@ -27,15 +21,8 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: 检查环境
-        run: |
-          echo "开始 ZeroClaw 翻译更新..."
-          echo "日期: $(date)"
-
       - name: 检出代码
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 设置 Python
         uses: actions/setup-python@v5
@@ -49,7 +36,6 @@ jobs:
 
       - name: 拉取上游最新代码
         run: |
-          # 克隆上游仓库
           if [ ! -d "../zeroclaw" ]; then
             git clone https://github.com/${{ env.UPSTREAM_REPO }}.git ../zeroclaw
           else
@@ -58,104 +44,84 @@ jobs:
             git checkout main
             git pull origin main
           fi
-          cd ${{ github.workspace }}
-          echo "上游代码已更新"
-
-      - name: 设置 LOCAL_SOURCE
-        run: |
-          echo "LOCAL_SOURCE=$(pwd)/../zeroclaw" >> $GITHUB_ENV
 
       - name: 应用翻译
         run: |
           cd ${{ github.workspace }}
-          python3 sync_translations.py --apply --source ../zeroclaw
-          echo "翻译已应用"
+          python3 apply_translations.py
 
       - name: 检查更改
         id: changes
         run: |
-          cd ${{ github.workspace }}
+          cd ../zeroclaw
           git status --porcelain
           if [ -n "$(git status --porcelain)" ]; then
-            echo "有更改需要提交"
             echo "has_changes=true" >> $GITHUB_OUTPUT
           else
-            echo "没有新更改"
             echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
 
       - name: 提交翻译更改
         if: steps.changes.outputs.has_changes == 'true'
         run: |
-          cd ${{ github.workspace }}
+          cd ../zeroclaw
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          
-          # 添加所有更改
           git add -A
-          
-          # 创建提交
-          git commit -m "翻译更新: $(date '+%Y-%m-%d %H:%M')"
-          
-          echo "提交已创建"
+          git commit -m "中文翻译更新: $(date '+%Y-%m-%d %H:%M')"
 
-      - name: 编译测试
-        if: steps.changes.outputs.has_changes == 'true'
-        run: |
-          cd ../zeroclaw
-          cargo build --release
-          echo "编译测试通过"
-
-      - name: 推送更改
-        if: steps.changes.outputs.has_changes == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            try {
-              await git.push({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: 'main',
-                force: true
-              });
-              console.log('翻译已推送');
-            } catch (e) {
-              console.log('推送失败:', e);
-            }
-
-      - name: 创建 Pull Request
-        if: steps.changes.outputs.has_changes == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data: prs } = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              head: 'main'
-            });
-            
-            if (prs.length === 0) {
-              await github.rest.pulls.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: '翻译更新: ' + new Date().toLocaleDateString('zh-CN'),
-                body: '自动翻译更新\n\n日期: ' + new Date().toLocaleString('zh-CN'),
-                head: 'main',
-                base: 'main'
-              });
-              console.log('已创建 PR');
-            } else {
-              console.log('PR 已存在');
-            }
-
-  notify:
+  build:
     needs: check-and-translate
     runs-on: ubuntu-latest
-    if: always()
+    permissions:
+      contents: write
 
     steps:
-      - name: 发送通知
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: 安装 Rust
+        run: rustup target add x86_64-unknown-linux-gnu
+
+      - name: 编译
         run: |
-          echo "翻译更新任务完成"
-          echo "状态: ${{ needs.check-and-translate.result }}"
+          cargo build --release --locked
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeroclaw
+          path: target/release/zeroclaw
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: zeroclaw
+
+      - name: 创建发布
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ZeroClaw 中文版 v0.1.8
+          body: |
+            ZeroClaw 中文翻译版本
+
+            包含所有 CLI 命令、状态输出、守护进程消息的中文翻译。
+
+            下载后添加执行权限: `chmod +x zeroclaw`
+          files: zeroclaw
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
