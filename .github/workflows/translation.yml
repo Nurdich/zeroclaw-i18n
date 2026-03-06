@@ -1,12 +1,9 @@
 name: ZeroClaw 中文翻译
 
 on:
-  # 每天早上 8 点自动运行
   schedule:
     - cron: '0 0 * * *'
-  # 也可以手动触发
   workflow_dispatch:
-  # 当上游 zeroclaw 发布新版本时触发
   release:
     types: [published]
 
@@ -14,11 +11,10 @@ env:
   UPSTREAM_REPO: "zeroclaw-labs/zeroclaw"
 
 jobs:
-  check-and-translate:
+  translate:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
 
     steps:
       - name: 检出代码
@@ -29,32 +25,19 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 安装 Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-
-      - name: 拉取上游最新代码
+      - name: 拉取上游代码
         run: |
-          if [ ! -d "../zeroclaw" ]; then
-            git clone https://github.com/${{ env.UPSTREAM_REPO }}.git ../zeroclaw
-          else
-            cd ../zeroclaw
-            git fetch origin
-            git checkout main
-            git pull origin main
-          fi
+          git clone https://github.com/${{ env.UPSTREAM_REPO }}.git ../zeroclaw
 
       - name: 应用翻译
         run: |
-          cd ${{ github.workspace }}
-          python3 apply_translations.py
+          cd ../zeroclaw
+          python3 ${{ github.workspace }}/apply_translations.py
 
       - name: 检查更改
         id: changes
         run: |
           cd ../zeroclaw
-          git status --porcelain
           if [ -n "$(git status --porcelain)" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
           else
@@ -69,59 +52,56 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add -A
           git commit -m "中文翻译更新: $(date '+%Y-%m-%d %H:%M')"
+          git push origin main
 
   build:
-    needs: check-and-translate
+    needs: translate
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - name: 拉取上游代码（含翻译）
+        run: |
+          git clone https://github.com/${{ env.UPSTREAM_REPO }}.git ../zeroclaw
+
+      - name: 再次应用翻译（确保最新）
+        run: |
+          cd ../zeroclaw
+          python3 ${{ github.workspace }}/apply_translations.py
+          git checkout main
 
       - name: 设置 Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-
-      - name: 安装 Rust
-        run: rustup target add x86_64-unknown-linux-gnu
 
       - name: 编译
-        run: |
-          cargo build --release --locked
-
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: zeroclaw
-          path: target/release/zeroclaw
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: 下载构建产物
-        uses: actions/download-artifact@v4
-        with:
-          name: zeroclaw
+        working-directory: ../zeroclaw
+        run: cargo build --release --locked
 
       - name: 创建发布
+        if: steps.changes.outputs.has_changes == 'true'
+        working-directory: ../zeroclaw
+        run: |
+          VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.8")
+          cd target/release
+          tar -czvf zeroclaw-$VERSION-linux-x64.tar.gz zeroclaw
+          echo "::set-output name=version::$VERSION"
+        id: version
+
+      - name: 上传发布
+        if: steps.changes.outputs.has_changes == 'true'
+        working-directory: ../zeroclaw/target/release
         uses: softprops/action-gh-release@v1
         with:
-          name: ZeroClaw 中文版 v0.1.8
+          tag_name: ${{ steps.version.outputs.version }}-zh
+          name: ZeroClaw 中文版 ${{ steps.version.outputs.version }}
           body: |
             ZeroClaw 中文翻译版本
 
             包含所有 CLI 命令、状态输出、守护进程消息的中文翻译。
 
             下载后添加执行权限: `chmod +x zeroclaw`
-          files: zeroclaw
+          files: zeroclaw-${{ steps.version.outputs.version }}-linux-x64.tar.gz
           draft: false
-          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
